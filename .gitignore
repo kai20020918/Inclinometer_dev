@@ -1,7 +1,4 @@
-# buildディレクトリをGitの追跡対象から除外する
 /build/
-
-# Pico/CMakeで生成される一般的なファイルを除外
 *.uf2
 *.elf
 *.bin
