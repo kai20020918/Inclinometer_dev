@@ -1,0 +1,23 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Cortex Debug (Pico 2)",
+            "cwd": "${workspaceFolder}",
+            "executable": "${command:cmake.launchTargetPath}",
+            "request": "launch",
+            "type": "cortex-debug",
+            "runToEntryPoint": "main",
+            "servertype": "openocd",
+            "gdbPath": "gdb-multiarch", 
+            "configFiles": [
+                "${env:HOME}/openocd_config/cmsis-dap.cfg",
+                "${env:HOME}/openocd_config/rp2350.cfg"
+            ],
+            "svdFile": "${env:HOME}/openocd_config/RP2350.svd",
+            "serverArgs": [
+                "-c", "adapter speed 1000"
+            ]
+        }
+    ]
+}

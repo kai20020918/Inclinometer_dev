@@ -1,0 +1,8 @@
+{
+    "C_Cpp.errorSquiggles": "disabled",
+    "cmake.configureArgs": [
+        "-D",
+        "PICO_TARGET_CHIP=rp2350"
+    ],
+    "cmake.configureOnOpen": true
+}
