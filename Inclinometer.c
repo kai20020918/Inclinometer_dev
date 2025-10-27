@@ -47,8 +47,6 @@ void enter_dormant_p1_7(void) {
     // --- 割り込みにより、ここで実行が再開 ---
 
     __nop();
-    __nop();
-    __nop();
 }
 
 /**
