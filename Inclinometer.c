@@ -39,7 +39,7 @@ void enter_dormant_p1_7(void) {
     hw_set_bits(&powman_hw->state, req_state_bits);
     
     // 2. DORMANT状態を要求 (XOSC: 外部クリスタルオシレータを停止)
-    xosc_dormant(); // RP2350でもこのAPIが利用可能であることを期待します
+    xosc_dormant(); 
 
     // 3. プロセッサをスリープさせる (Wait For Interrupt)
     __wfi();
@@ -71,7 +71,7 @@ void setup_dormant_wakeup(uint gpio_pin) {
     uint32_t pwrup_config = 
         (gpio_pin << POWMAN_PWRUP0_SOURCE_LSB) | // GPIO 22
         (POWMAN_PWRUP0_DIRECTION_VALUE_HIGH_RISING << POWMAN_PWRUP0_DIRECTION_LSB) | // HIGHレベル検出
-        (POWMAN_PWRUP0_MODE_VALUE_LEVEL << POWMAN_PWRUP0_MODE_LSB) | // レベル検出
+        (POWMAN_PWRUP0_MODE_VALUE_EDGE << POWMAN_PWRUP0_MODE_LSB) | // レベル検出
         (1 << POWMAN_PWRUP0_ENABLE_LSB); // 有効化
         
     // c. レジスタに書き込み
@@ -87,6 +87,12 @@ int main() {
     // --- ウェイクアップ設定 (修正後の関数を呼び出し) ---
     setup_dormant_wakeup(WAKE_PIN);
 
+    for (int i = 0; i < 30; i++) { // 15秒 / 0.5秒 = 30回点滅
+            gpio_put(PICO_DEFAULT_LED_PIN, 1);
+            sleep_ms(250);
+            gpio_put(PICO_DEFAULT_LED_PIN, 0);
+            sleep_ms(250);
+        }
     // --- Dormantモードへ移行 ---
     
     // LEDを1回点滅させて、Dormantに入ることを知らせる
