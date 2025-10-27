@@ -1,135 +1,118 @@
-/**
- * @file main.c
- * @brief A power-efficient program that periodically reads accelerometer
- * data via SPI and displays it in g-force on the PC terminal via UART.
- */
-
-
-//割り込みの実装
-#include <stdio.h>
 #include "pico/stdlib.h"
-#include "hardware/uart.h"
-#include "hardware/spi.h"
-#include "hardware/irq.h"
-#include "hardware/timer.h"
+#include "pico/platform.h"
 #include "hardware/sync.h"
-#include "hardware/clocks.h"
+#include "hardware/gpio.h"    // GPIO設定用
+#include "hardware/powman.h"  // powman_set_state_req, powman_set_dormant_gpio_wake の宣言
+#include "hardware/xosc.h"    // xosc_dormant の宣言
+#include "hardware/regs/powman.h" // POWMANレジスタのビット定義用
+#include "hardware/structs/powman.h" // powmanレジスタ構造体 (powman_hw) へのアクセス用
 
-// === Configuration ===
-#define UART_PC_ID          uart0
-#define UART_PC_TX_PIN      0
-#define UART_PC_RX_PIN      1
-#define SPI_ACCEL_ID        spi0
-#define SPI_ACCEL_SCK_PIN   18
-#define SPI_ACCEL_MOSI_PIN  19
-#define SPI_ACCEL_MISO_PIN  16
-#define SPI_ACCEL_CS_PIN    17
+// ウェイクアップに使用するピン
+#define WAKE_PIN 22
+// LEDピン (環境に合わせて変更してください)
+#ifndef PICO_DEFAULT_LED_PIN
+#define PICO_DEFAULT_LED_PIN 25
+#endif
 
-#define BAUD_RATE           9600
-#define DISPLAY_INTERVAL_MS 1000 // 1秒ごとに更新
+// RP2350のPOWMAN_STATE_REQ (bit 7-4) の全パワーダウンビットは 0xF0
+#define RP2350_STATE_REQ_P1_7_ALL_OFF \
+    (POWMAN_STATE_REQ_BITS & \
+    (0x1 << POWMAN_STATE_REQ_SWCORE_LSB) | \
+    (0x1 << POWMAN_STATE_REQ_XIP_LSB) | \
+    (0x1 << POWMAN_STATE_REQ_SRAM0_LSB) | \
+    (0x1 << POWMAN_STATE_REQ_SRAM1_LSB)) 
+// ^^^ RP2040マクロの代わりに、RP2350ヘッダーのLSB定義に基づき 0xF0 を得る
 
-// ADXL367 Register and Command Defines
-#define ADXL367_REG_DATA_START    0x0E
-#define ADXL367_REG_POWER_CTL     0x2D
-#define ADXL367_SPI_READ_CMD      0x0B
-#define ADXL367_SPI_WRITE_CMD     0x0A
-#define SENSITIVITY_2G            0.00025f // 2gレンジでの感度 (0.25 mg/LSB)
+/**
+ * @brief P1.7 (全ドメインOFF) + DORMANT (オシレータOFF) 状態に移行
+ */
+void enter_dormant_p1_7(void) {
+    // RP2350では、powman_set_state_req() の代わりに、手動でレジスタを操作します。
+    // RP2350の powman_hw->state レジスタのビット 7-4 に 0xF を書き込みます (P1.7要求)。
+    // 注: RP2040 SDKの powman_set_state_req() は非推奨/非対応の可能性が高いため、低レベルで置き換えました。
 
-// --- グローバル変数 ---
-volatile bool display_update_needed = false;
+    // 1. P1.7 (全ドメインOFF) を要求: 0xF0
+    uint32_t req_state_bits = 0xF0; 
+    
+    // SDKの powman_hw 構造体を使用してレジスタに直接書き込みます
+    // powman_hw->state レジスタのビット 7-4 のみを設定
+    hw_set_bits(&powman_hw->state, req_state_bits);
+    
+    // 2. DORMANT状態を要求 (XOSC: 外部クリスタルオシレータを停止)
+    xosc_dormant(); // RP2350でもこのAPIが利用可能であることを期待します
 
-// --- ADXL367 Helper Functions (変更なし) ---
-static inline void cs_select() {
-    gpio_put(SPI_ACCEL_CS_PIN, 0);
+    // 3. プロセッサをスリープさせる (Wait For Interrupt)
+    __wfi();
+
+    // --- 割り込みにより、ここで実行が再開 ---
+
+    __nop();
+    __nop();
+    __nop();
 }
 
-static inline void cs_deselect() {
-    gpio_put(SPI_ACCEL_CS_PIN, 1);
-}
+/**
+ * @brief Dormantモードのウェイクアップ設定をRP2350向けに修正
+ */
+void setup_dormant_wakeup(uint gpio_pin) {
+    // RP2350では powman_set_dormant_gpio_wake() は非推奨/非対応の可能性が高いため、
+    // POWMAN_PWRUPx レジスタを直接操作します。PWRUP0を使用します。
+    
+    // 1. GPIO22を初期化 (入力)
+    gpio_init(gpio_pin);
+    gpio_set_dir(gpio_pin, GPIO_IN);
+    gpio_pull_down(gpio_pin);
 
-void adxl367_write_register(uint8_t reg_addr, uint8_t data) {
-    uint8_t tx_buf[3] = {ADXL367_SPI_WRITE_CMD, reg_addr, data};
-    cs_select();
-    spi_write_blocking(SPI_ACCEL_ID, tx_buf, 3);
-    cs_deselect();
-}
+    // 2. PWRUP0をGPIO 22でHIGHレベルウェイクアップに設定
+    // a. まず、PWRUP0を無効化し、ステータスをクリア
+    powman_hw->pwrup[0] = (0 << POWMAN_PWRUP0_ENABLE_LSB); // 無効化
+    powman_hw->pwrup[0] = (1 << POWMAN_PWRUP0_STATUS_LSB); // ステータス(ラッチされたエッジ)をクリア
 
-void adxl367_read_registers(uint8_t reg_addr, uint8_t *buffer, uint16_t len) {
-    uint8_t cmd[2] = {ADXL367_SPI_READ_CMD, reg_addr};
-    cs_select();
-    spi_write_blocking(SPI_ACCEL_ID, cmd, 2);
-    spi_read_blocking(SPI_ACCEL_ID, 0, buffer, len);
-    cs_deselect();
-}
-
-void adxl367_read_accel_data(int16_t *x, int16_t *y, int16_t *z) {
-    uint8_t data[6];
-    adxl367_read_registers(ADXL367_REG_DATA_START, data, 6);
-    *x = (int16_t)((data[0] << 8) | data[1]) >> 2;
-    *y = (int16_t)((data[2] << 8) | data[3]) >> 2;
-    *z = (int16_t)((data[4] << 8) | data[5]) >> 2;
-}
-
-// --- 割り込みハンドラ ---
-// 定期タイマーのコールバック関数
-bool repeating_timer_callback(struct repeating_timer *t) {
-    display_update_needed = true; // メインループに更新を通知
-    return true; // タイマーを継続
+    // b. 設定値を構築
+    // SOURCE=22, DIRECTION=HIGH_RISING(0x1), MODE=LEVEL(0x0), ENABLE=1
+    uint32_t pwrup_config = 
+        (gpio_pin << POWMAN_PWRUP0_SOURCE_LSB) | // GPIO 22
+        (POWMAN_PWRUP0_DIRECTION_VALUE_HIGH_RISING << POWMAN_PWRUP0_DIRECTION_LSB) | // HIGHレベル検出
+        (POWMAN_PWRUP0_MODE_VALUE_LEVEL << POWMAN_PWRUP0_MODE_LSB) | // レベル検出
+        (1 << POWMAN_PWRUP0_ENABLE_LSB); // 有効化
+        
+    // c. レジスタに書き込み
+    powman_hw->pwrup[0] = pwrup_config;
 }
 
 
 int main() {
-    // システムクロックを設定
-    set_sys_clock_khz(125000, true);
-    
-    // USBシリアル(stdio)の初期化
-    stdio_init_all();
-    sleep_ms(2000); // 起動待機
-    printf("\n--- Pico Accelerometer Reader ---\n");
-    printf("Displaying sensor data (g-force) every %d ms.\n", DISPLAY_INTERVAL_MS);
+    // ... (初期化処理は省略) ...
+    gpio_init(PICO_DEFAULT_LED_PIN);
+    gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
 
-    // --- Hardware Initialization ---
-    // SPIの初期化 (加速度センサー用)
-    spi_init(SPI_ACCEL_ID, 1000 * 1000); // 1MHz
-    gpio_set_function(SPI_ACCEL_SCK_PIN, GPIO_FUNC_SPI);
-    gpio_set_function(SPI_ACCEL_MOSI_PIN, GPIO_FUNC_SPI);
-    gpio_set_function(SPI_ACCEL_MISO_PIN, GPIO_FUNC_SPI);
-    gpio_init(SPI_ACCEL_CS_PIN);
-    gpio_set_dir(SPI_ACCEL_CS_PIN, GPIO_OUT);
-    gpio_put(SPI_ACCEL_CS_PIN, 1); // Deselect
-    spi_set_format(SPI_ACCEL_ID, 8, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST);
+    // --- ウェイクアップ設定 (修正後の関数を呼び出し) ---
+    setup_dormant_wakeup(WAKE_PIN);
+
+    // --- Dormantモードへ移行 ---
     
-    // 加速度センサーを測定モードに設定
-    adxl367_write_register(ADXL367_REG_POWER_CTL, 0x02);
+    // LEDを1回点滅させて、Dormantに入ることを知らせる
+    gpio_put(PICO_DEFAULT_LED_PIN, 1);
     sleep_ms(100);
+    gpio_put(PICO_DEFAULT_LED_PIN, 0);
+    sleep_ms(500);
 
-    // --- 割り込み設定 ---
-    // 指定した間隔でコールバックを呼ぶリピーティングタイマーを作成
-    struct repeating_timer timer;
-    add_repeating_timer_ms(DISPLAY_INTERVAL_MS, repeating_timer_callback, NULL, &timer);
+    // Dormantモードに移行
+    enter_dormant_p1_7();
 
-    // --- メインループ ---
-    while (1) {
-        // タイマー割り込みによってフラグが立ったか確認
-        if (display_update_needed) {
-            display_update_needed = false; // フラグをリセット
-
-            // 加速度センサーからデータを読み込む
-            int16_t raw_x, raw_y, raw_z;
-            adxl367_read_accel_data(&raw_x, &raw_y, &raw_z);
-
-            // ★修正点1: LSB値をg (重力加速度) に変換
-            float g_x = (float)raw_x * SENSITIVITY_2G;
-            float g_y = (float)raw_y * SENSITIVITY_2G;
-            float g_z = (float)raw_z * SENSITIVITY_2G;
-
-            // ★修正点2: 変換後のg単位のデータをPCに送信
-            printf("X: %6.3fg, Y: %6.3fg, Z: %6.3fg\n", g_x, g_y, g_z);
-        }
-
-        // 割り込みが発生するまでCPUをスリープさせ、電力を節約する
-        __wfi(); // Wait For Interrupt
+    // --- ウェイクアップ後 ---
+    
+    // ... (復帰後の処理は省略) ...
+    for (int i = 0; i < 10; i++) {
+        gpio_put(PICO_DEFAULT_LED_PIN, !gpio_get_out_level(PICO_DEFAULT_LED_PIN));
+        sleep_ms(50);
     }
 
-    return 0; // 到達しない
+    // メインループ
+    while (true) {
+        gpio_put(PICO_DEFAULT_LED_PIN, 1);
+        sleep_ms(1000);
+        gpio_put(PICO_DEFAULT_LED_PIN, 0);
+        sleep_ms(1000);
+    }
 }

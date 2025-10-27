@@ -22,7 +22,16 @@ add_executable(Inclinometer
 )
 
 # 共通ライブラリをリンク
-target_link_libraries(Inclinometer pico_stdlib hardware_spi )
+target_link_libraries(Inclinometer pico_stdlib
+    pico_platform
+    # pico_arm_common
+    hardware_spi
+    hardware_gpio     # 必須：GPIO関数 (gpio_init など) のため
+    hardware_regs     # 必須：レジスタマクロ (POWMAN_STATE_REQ...) のため
+    hardware_powman
+    hardware_xosc
+    hardware_sync
+)
 
 # WiFiチップ搭載のボード(Pico Wなど)のとき
 if (PICO_CYW43_SUPPORTED)
