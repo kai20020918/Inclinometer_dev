@@ -23,7 +23,21 @@ add_executable(Inclinometer
 )
 
 # 共通ライブラリをリンク
-target_link_libraries(Inclinometer PRIVATE pico_stdlib pico_platform hardware_spi hardware_gpio hardware_regs hardware_powman hardware_xosc hardware_sync hardware_clocks hardware_vreg hardware_adc)
+target_link_libraries(Inclinometer 
+    PRIVATE 
+    pico_stdlib 
+    pico_platform 
+    hardware_spi 
+    hardware_gpio 
+    hardware_regs 
+    hardware_powman 
+    hardware_xosc 
+    hardware_sync 
+    hardware_clocks 
+    hardware_vreg 
+    hardware_adc
+    hardware_resets    
+)
 
 # powman_example.h が powman.h の構造体を参照するために、
 # カスタムハードウェアインクルードパスを追加する必要がある場合があります。

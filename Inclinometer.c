@@ -103,12 +103,10 @@ int main() {
     // === 3. 周辺機器の停止とリセット（強化） ===
 
     // ADC以外の未使用周辺機器をリセットして停止し、消費電流を最小化する
-    // reset_block(RESETS_RESET_ADC_BITS | 
-    //             RESETS_RESET_UART0_BITS | 
-    //             RESETS_RESET_SPI0_BITS | 
-    //             RESETS_RESET_I2C0_BITS | 
-    //             RESETS_RESET_PWM_BITS |
-    //             RESETS_RESET_TIMER_BITS);
+    reset_block(RESETS_RESET_ADC_BITS |  
+                RESETS_RESET_I2C0_BITS | 
+                RESETS_RESET_PWM_BITS 
+            );
 
     // Turn off USB PHY and apply pull downs on DP & DM (低消費電力化)
     disable_usb();
