@@ -17,26 +17,27 @@ set(CMAKE_CXX_STANDARD 17)
 # SDK初期化
 pico_sdk_init()
 
-add_executable(Inclinometer
-    Inclinometer.c
+add_executable(Inclinometer 
+    Inclinometer.c 
+    powman_example.c # ★ カスタム低電力タイマー機能のソースファイルを追加 ★
 )
 
 # 共通ライブラリをリンク
-target_link_libraries(Inclinometer pico_stdlib
-    pico_platform
-    # pico_arm_common
-    hardware_spi
-    hardware_gpio     # 必須：GPIO関数 (gpio_init など) のため
-    hardware_regs     # 必須：レジスタマクロ (POWMAN_STATE_REQ...) のため
-    hardware_powman
-    hardware_xosc
-    hardware_sync
+target_link_libraries(Inclinometer PRIVATE pico_stdlib pico_platform hardware_spi hardware_gpio hardware_regs hardware_powman hardware_xosc hardware_sync hardware_clocks hardware_vreg hardware_adc)
+
+# powman_example.h が powman.h の構造体を参照するために、
+# カスタムハードウェアインクルードパスを追加する必要がある場合があります。
+target_include_directories(Inclinometer PRIVATE
+    ${PICO_SDK_PATH}/src/rp2_common/hardware_powman/include
+    # もし powman_example.h が powman.h と異なるディレクトリにある場合、それも追加
+    ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+
 # WiFiチップ搭載のボード(Pico Wなど)のとき
-if (PICO_CYW43_SUPPORTED)
-    target_link_libraries(Inclinometer pico_cyw43_arch_none)
-endif()
+# if (PICO_CYW43_SUPPORTED)
+#     target_link_libraries(Inclinometer pico_cyw43_arch_none)
+# endif()
 
 # map/bin/hex/uf2ファイルを生成
 pico_add_extra_outputs(Inclinometer)
